@@ -2,14 +2,14 @@ package main
 
 import (
 	"bufio"
+	"encoding/gob"
 	"fmt"
+	"log"
+	"net"
 	"os"
 	"strings"
-	"net"
-	"log"
-	"time"
 	"sync"
-	"encoding/gob"
+	"time"
 )
 
 var mode bool
@@ -26,9 +26,9 @@ var logger *log.Logger
 var latest_messages []message
 
 type message struct {
-	Author	string
-	Color string 
-	Payload string
+	Author    string
+	Color     string
+	Payload   string
 	Timestamp time.Time
 }
 
@@ -38,26 +38,26 @@ type connectionHub struct {
 
 type connection struct {
 	realConn net.Conn
-	hub *connectionHub
+	hub      *connectionHub
 }
 
-
 func start_server(port string) *net.Listener {
-	ln, err := net.Listen("tcp", ":"+ port)
+	ln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
-		if logging{
+		if logging {
 			logger.Fatal("ERROR starting server")
 		}
-	}else{
-		if logging{
-			logger.Output(2, "Started the Server on port " + port)
+	} else {
+		if logging {
+			logger.Output(2, "Started the Server on port "+port)
 		}
 	}
 	return &ln
 }
-func start_client(){
-	
+func start_client() {
+
 }
+
 // function which handle a connection
 // it listen to client sent messages and then send the messages to all the clients
 // connected
@@ -69,67 +69,71 @@ func SetColor(rgb string) {
 func ClearScreen() {
 	fmt.Print("\033[H\033[2J")
 }
-func run_server(port string, hub connectionHub){ 
+func run_server(port string, hub connectionHub) {
 	fmt.Println("runno il server")
 	listener := start_server(port)
 	/*
-	for i := 0; i<100; i++{
-		time.Sleep(time.Second)
-		mes := message{"lorenzo", strconv.Itoa(i), time.Now()}
-		fmt.Println("mando...")
-		rec <- mes
-	}
+		for i := 0; i<100; i++{
+			time.Sleep(time.Second)
+			mes := message{"lorenzo", strconv.Itoa(i), time.Now()}
+			fmt.Println("mando...")
+			rec <- mes
+		}
 	*/
 
 	for {
 		// accept the connections
 		conn, err := (*listener).Accept()
-			if logging{
-				logger.Println("accepting connection...")
-			}
+		if logging {
+			logger.Println("accepting connection...")
+		}
 		if err != nil {
 			if logging {
-				logger.Println("Error accepting connection:" ,err)
+				logger.Println("Error accepting connection:", err)
 			}
-		} else{
+		} else {
 			// connection accepted succesfully, add the connection to the connections pool
-			opened_conn := connection{conn,&hub} 
+			opened_conn := connection{conn, &hub}
 			hub.connections[&opened_conn] = true
-			
+
 			if logging {
-				logger.Println("Connection accepted and added to connection pool");
+				logger.Println("Connection accepted and added to connection pool")
 			}
 			// communicate to all client on the server that a new user has joined
-			
 
 			// ascolto sulla connessione, in caso arrivi qualcosa mando a tutti e stampo anche per debug
-			go func(){				
+			go func() {
 				// gestisco la connessione
 				dec := gob.NewDecoder(conn)
 				for {
-					if logging{
+					if logging {
 						logger.Println("Got message")
 					}
 					// prendo il messaggio che mi è stato inviato
 					var msg message
 					dec.Decode(&msg)
-					if msg.Author == ""{
+					if msg.Author == "" {
 						// remove the connection from the connection pool
 						delete(hub.connections, &opened_conn)
 						conn.Close()
 						break
 					}
-					
+
 					fmt.Println("ricevuto", msg)
-					
-					if msg.Payload == "/quit"{
+
+					if msg.Payload == "/quit" {
+						// sends a message to aknowledge the termination of the session.
+						enc := gob.NewEncoder(conn)
+						quit_msg := message{nickname, selected_color, "/acktermination", time.Now()}
+						fmt.Println("sending termination signal to the user " + nickname)
+						enc.Encode(quit_msg)
 						// remove the user from the connection pool and close the connection.
 						// then communicate this information to all the connected clients.
 						delete(hub.connections, &opened_conn)
 						conn.Close()
-						msg = message{nickname, selected_color, "User " + msg.Author + " Left the chat.", time.Now()}	
-					}else if msg.Payload == "/connectionrequest"{
-						msg = message{nickname, selected_color, "User " + msg.Author + " Joined the chat.",  time.Now()}
+						msg = message{nickname, selected_color, "User " + msg.Author + " Left the chat.", time.Now()}
+					} else if msg.Payload == "/connectionrequest" {
+						msg = message{nickname, selected_color, "User " + msg.Author + " Joined the chat.", time.Now()}
 					}
 					// output the message to all client connected
 					for c := range hub.connections {
@@ -143,87 +147,99 @@ func run_server(port string, hub connectionHub){
 
 	}
 }
-func run_client(address, port string){
+func run_client(address, port string) {
 	var waitgroup sync.WaitGroup
-	if logging{
-		logger.Println("Connecting to server with address", address, ":", port,"...")
+	// contains if the client requested the termination
+	var req_term bool = false
+	if logging {
+		logger.Println("Connecting to server with address", address, ":", port, "...")
 	}
-	conn, err := net.Dial("tcp", address+ ":"+ port)
+	conn, err := net.Dial("tcp", address+":"+port)
 	if err != nil {
 		logger.Panic("Error connecting to server:", err)
-	}else{
+	} else {
 		waitgroup.Add(3)
 		// defer conn.Close()
 		messaggi_chan := make(chan message)
-
 		// leggi nuovo messaggio
-		go func(){
+		go func() {
 			// invia un messaggio che serve a comunicare al server che si è pronti per comunicare
-			messaggi_chan<- message{nickname, selected_color, "/connectionrequest", time.Now()}
+			messaggi_chan <- message{nickname, selected_color, "/connectionrequest", time.Now()}
 
-			for{
+			for {
 				scanner := bufio.NewScanner(os.Stdin)
 				fmt.Print(">")
 				scanner.Scan()
 				payload := scanner.Text()
-				
+
 				msg := message{nickname, selected_color, payload, time.Now()}
+
 				messaggi_chan <- msg
-				if payload == "/quit"{
+				if payload == "/quit" {
+					break
+				}
+			}
+			fmt.Println("termino la lettura dei messaggi")
+			waitgroup.Done()
+			req_term = true
+					
+		}()
+		// manda messaggio
+		go func() {
+			enc := gob.NewEncoder(conn)
+			for {
+				msg := <-messaggi_chan
+				err := enc.Encode(msg)
+				if err != nil {
+					logger.Println("Error encoding struct", msg, ":", err)
+				}
+				if msg.Payload == "/quit" {
 					break
 				}
 			}
 			waitgroup.Done()
 		}()
-		// manda messaggio
-		go func(){
-			enc := gob.NewEncoder(conn)
-			for {
-				msg := <-messaggi_chan
-				err := enc.Encode(msg)
-				if err != nil{
-					logger.Println("Error encoding struct", msg, ":", err)
-				}
-			}
-			conn.Close()
-			waitgroup.Done()
-		}()
 		// ricevi e stampa
-		go func(){
+		go func() {
 			dec := gob.NewDecoder(conn)
 			for {
 				var msg message
 				dec.Decode(&msg)
 
-				if msg.Author != ""{
+				if msg.Author != "" {
 					// stampa tutti i messaggi partendo dal primo
 					latest_messages = append(latest_messages, msg)
 					ClearScreen()
-					for _, v := range latest_messages{
+
+					for _, v := range latest_messages {
 						SetColor(v.Color)
 						fmt.Println(v.Author, ":", v.Timestamp.Format(time.UnixDate), "\n>", v.Payload)
-						SetColor("255;255;255");
+						SetColor("255;255;255")
+					}
+					if msg.Author == "__SERVER__" && msg.Payload == "/acktermination" && req_term==true {
+						break
 					}
 				}
 			}
 			waitgroup.Done()
 		}()
+		waitgroup.Wait()
 	}
-	waitgroup.Done()
+	
 }
-func read_message(send chan message){
+func read_message(send chan message) {
 	var input string
 
 	scanner := bufio.NewScanner(os.Stdin)
 
-	for scanner.Scan(){
+	for scanner.Scan() {
 		input = scanner.Text()
 		fmt.Println(":")
-		send <- message{nickname, selected_color, input, time.Now()} 
+		send <- message{nickname, selected_color, input, time.Now()}
 	}
 }
 
-func print_message(rec <-chan message){
+func print_message(rec <-chan message) {
 	for {
 		select {
 		case msg := <-rec:
@@ -233,34 +249,34 @@ func print_message(rec <-chan message){
 }
 
 func main() {
-	
+
 	// open the log file
 	out_log, err := os.Create("./log" + string(os.PathSeparator) + strings.ReplaceAll(time.Now().Format(time.UnixDate), " ", "_") + ".log")
-	if err != nil{
+	if err != nil {
 		fmt.Println("ERROR opening log file, will not be logging on file")
 		fmt.Println("file opening error:", err)
 		logging = false
-	}else{
-		logger = log.New(out_log, "directChat ", log.Ldate | log.Ltime)
+	} else {
+		logger = log.New(out_log, "directChat ", log.Ldate|log.Ltime)
 	}
 	fmt.Println("starting..")
-	if logging{
+	if logging {
 		logger.Output(2, "starting")
 	}
-	
+
 	// default mode is client
-	mode = CLIENT	
+	mode = CLIENT
 	// clean the screen..
 	fmt.Print("\033[H\033[2J")
 	// if args are passed and are exactly 3 then it is presumed that those args are correct and used instead of stdin
 	var command_code string
 	var ip_address string
 	var port string
-	if len(os.Args) == 3+1{
+	if len(os.Args) == 3+1 {
 		command_code = os.Args[1]
 		ip_address = os.Args[2]
-		port = os.Args[3]	
-	}else{
+		port = os.Args[3]
+	} else {
 		fmt.Print(">")
 		var command string
 		scanner := bufio.NewScanner(os.Stdin)
@@ -270,12 +286,12 @@ func main() {
 		command = strings.Split(command, "\n")[0] // removes the \n from the command
 		command_parts := strings.Split(command, " ")
 
-	// every command follow the convention:
-	/*
-		command code (c for connect s to start a server)
-		ip address (not used in caso of s command)
-		port
-	*/
+		// every command follow the convention:
+		/*
+			command code (c for connect s to start a server)
+			ip address (not used in caso of s command)
+			port
+		*/
 		command_code = command_parts[0]
 		ip_address = command_parts[1]
 		port = command_parts[2]
@@ -286,11 +302,10 @@ func main() {
 	sen := make(chan message, 20)
 	// create the waitgroup for the two goroutines
 	var wg sync.WaitGroup
-	wg.Add(3)
 	// switch to run the commands inserted
 	switch {
 	case command_code == "c":
-		fmt.Print("nickname:");
+		fmt.Print("nickname:")
 		fmt.Scan(&nickname)
 		fmt.Print("Color(r;g;b):")
 		fmt.Scan(&selected_color)
@@ -298,24 +313,25 @@ func main() {
 		mode = CLIENT
 		run_client(ip_address, port)
 	case command_code == "s":
+		wg.Add(3)
 		nickname = "__SERVER__"
 		selected_color = "255;255;255"
 		fmt.Println("starting server mode")
 		mode = SERVER
 		var hub connectionHub
 		hub.connections = make(map[*connection]bool)
-		go func(){ 
+		go func() {
 			run_server(port, hub)
 			wg.Done()
 		}()
-		go func(){
+		go func() {
 			print_message(rec)
 			wg.Done()
 		}()
-		go func(){
+		go func() {
 			read_message(sen)
 			wg.Done()
 		}()
+		wg.Wait()
 	}
-	wg.Wait()
 }
